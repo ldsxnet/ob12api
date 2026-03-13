@@ -1,16 +1,16 @@
 """API key + JWT verification."""
-import time
+
 import secrets
+import time
+from typing import Optional
 
 import jwt
-from fastapi import HTTPException, Security
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import HTTPException, Request
 
 from ..services.api_key_manager import ApiKeyManager
 from ..core import config
 
-_security = HTTPBearer()
-_key_manager: ApiKeyManager = None
+_key_manager: Optional[ApiKeyManager] = None
 _JWT_SECRET = secrets.token_hex(32)
 _JWT_EXPIRE = 86400 * 7  # 7 days
 
@@ -29,10 +29,17 @@ def verify_login(username: str, password: str) -> bool:
     return username == config.ADMIN_USERNAME and password == config.ADMIN_PASSWORD
 
 
-async def verify_api_key(
-    credentials: HTTPAuthorizationCredentials = Security(_security),
-) -> str:
-    token = credentials.credentials
+def _extract_token(request: Request) -> Optional[str]:
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip()
+    return request.headers.get("x-api-key")
+
+
+async def verify_api_key(request: Request) -> str:
+    token = _extract_token(request)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing token")
     # Try JWT first
     try:
         payload = jwt.decode(token, _JWT_SECRET, algorithms=["HS256"])
