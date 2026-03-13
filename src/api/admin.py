@@ -94,15 +94,57 @@ async def import_accounts(req: ImportRequest):
     return {"ok": True, "imported": count}
 
 
-@router.post("/accounts/push")
-async def push_accounts(req: ImportRequest, request: Request):
-    """外部推送账号接口，使用 API Key 鉴权（无需登录）"""
+class PushRequest(BaseModel):
+    refresh_tokens: list[str] | None = None
+    accounts: list[dict] | None = None
+
+
+def _verify_api_key_from_request(request: Request) -> bool:
     from ..core.auth import _extract_token
     token = _extract_token(request)
-    if not token or not _km or not _km.validate(token):
+    return bool(token and _km and _km.validate(token))
+
+
+@router.post("/accounts/push")
+async def push_accounts(req: PushRequest, request: Request):
+    """外部推送账号接口（API Key 鉴权），支持两种模式：
+    1. refresh_tokens: 只传 RT，服务端自动刷新补全
+    2. accounts: 传完整账号数据，直接导入
+    """
+    if not _verify_api_key_from_request(request):
         return JSONResponse(status_code=401, content={"ok": False, "message": "Invalid API Key"})
-    count = _tm.import_accounts(req.accounts)
-    return {"ok": True, "imported": count}
+
+    imported = 0
+    errors = []
+
+    # 模式1：完整账号数据直接导入
+    if req.accounts:
+        imported = _tm.import_accounts(req.accounts)
+
+    # 模式2：只传 refresh_token，自动刷新
+    if req.refresh_tokens:
+        from ..services.token_manager import Account
+        for rt in req.refresh_tokens:
+            rt = rt.strip()
+            if not rt:
+                continue
+            existing_rts = {a.refresh_token for a in _tm._accounts}
+            if rt in existing_rts:
+                errors.append({"refresh_token": rt[:20] + "...", "error": "已存在"})
+                continue
+            acct = Account({"refresh_token": rt, "expires_at": 0})
+            _tm._accounts.append(acct)
+            idx = len(_tm._accounts) - 1
+            ok = await _tm.refresh_account(idx, force=True)
+            if ok:
+                imported += 1
+            else:
+                _tm._accounts.pop(idx)
+                errors.append({"refresh_token": rt[:20] + "...", "error": "刷新失败"})
+        if imported:
+            _tm._save()
+
+    return {"ok": True, "imported": imported, "errors": errors}
 
 
 class BatchDeleteRequest(BaseModel):
