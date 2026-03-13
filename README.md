@@ -4,7 +4,7 @@
 
 **将 [OB-1](https://openblocklabs.com) AI 服务转为 OpenAI 兼容 API**
 
-[快速开始](#快速开始) | [功能特性](#功能特性) | [配置说明](#配置说明) | [API 文档](#api-接口) | [客户端对接](#客户端对接)
+[快速开始](#快速开始) | [功能特性](#功能特性) | [配置说明](#配置说明) | [API 文档](#api-接口)
 
 </div>
 
@@ -24,7 +24,7 @@
 
 ```bash
 # 克隆项目
-git clone https://github.com/your-username/ob12api.git
+git clone https://github.com/longnghiemduc6-art/ob12api.git
 cd ob12api
 
 # 安装依赖
@@ -140,17 +140,6 @@ curl http://localhost:8081/v1/chat/completions \
   }'
 ```
 
-## 客户端对接
-
-支持所有兼容 OpenAI API 的客户端：
-
-| 客户端 | 配置方式 |
-|--------|----------|
-| [ChatGPT Next Web](https://github.com/ChatGPTNextWeb/ChatGPT-Next-Web) | 设置 API 地址为 `http://your-server:8081/v1` |
-| [LobeChat](https://github.com/lobehub/lobe-chat) | 添加自定义 OpenAI 兼容模型供应商 |
-| [OpenCat](https://opencat.app/) | 自定义 API 域名填写服务器地址 |
-| 其他兼容客户端 | API 地址：`http://your-server:8081/v1`，API Key：管理面板中创建 |
-
 ## 项目结构
 
 ```
@@ -187,7 +176,7 @@ ob12api/
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=your-username/ob12api&type=Date)](https://star-history.com/#your-username/ob12api&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=longnghiemduc6-art/ob12api&type=Date)](https://star-history.com/#longnghiemduc6-art/ob12api&Date)
 
 ## 免责声明
 
