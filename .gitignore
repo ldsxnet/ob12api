@@ -15,6 +15,10 @@ data/tokens.json
 .vscode/
 *.swp
 
+# Register tools
+ob1_register/
+ob1_register_http/
+
 # OS
 .DS_Store
 Thumbs.db

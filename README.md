@@ -11,6 +11,7 @@
 ## 功能特性
 
 - 🔄 **OpenAI 兼容** — `/v1/chat/completions`、`/v1/models`，直接对接主流客户端
+- 🤖 **Anthropic Messages API** — `/v1/messages`，兼容 Claude Code 等 Anthropic 原生客户端
 - 👥 **多账号轮换** — 缓存优先 / 平衡轮换 / 性能优先三种调度策略
 - 🔐 **自动 Token 管理** — 基于 WorkOS OAuth 设备授权，自动续期，401 即时重试
 - 📡 **流式输出** — 完整 SSE 流式响应，实时返回生成内容
@@ -168,6 +169,75 @@ ob12api/
 │       └── api_key_manager.py # API Key 管理
 └── static/                  # 管理面板前端资源
 ```
+
+## 常见问题
+
+### Docker 相关
+
+**Q: Docker 部署后设备授权报错 400**
+
+确保容器能访问外网（WorkOS API）。如需代理，在 `config/setting.toml` 中配置：
+
+```toml
+[proxy]
+url = "http://your-proxy:7890"
+```
+
+或在 Docker 启动时传入网络代理环境变量。
+
+**Q: Docker 重启后管理面板需要重新登录**
+
+这是正常现象。管理面板的 JWT 密钥在每次进程启动时重新生成，重启后旧 Token 失效，重新登录即可。
+
+**Q: Docker 挂载卷后配置不生效**
+
+确认挂载路径正确，配置文件应在宿主机的 `./config/setting.toml`：
+
+```bash
+docker run -d -p 8081:8081 \
+  -v ./config:/app/config \
+  -v ./data:/app/data \
+  ob12api
+```
+
+### 启动报错
+
+**Q: 启动时报 `FileNotFoundError` 或 `KeyError`**
+
+缺少配置文件或配置项不完整。确保 `config/setting.toml` 存在且包含必要字段（`[global]`、`[server]`、`[ob1]`）。可参考上方 [配置说明](#配置说明)。
+
+**Q: 启动时报 `JSONDecodeError`**
+
+`config/accounts.json` 或 `data/tokens.json` 文件损坏。删除对应文件后重启，系统会自动重建：
+
+```bash
+rm config/accounts.json data/tokens.json
+python main.py
+```
+
+### 账号与 Token
+
+**Q: 所有请求返回 503 `No valid OB-1 token`**
+
+所有账号的 Token 均已过期且自动刷新失败。进入管理面板检查账号状态，尝试重新授权或删除失效账号重新添加。
+
+**Q: 设备授权时 WorkOS 返回错误**
+
+- 检查网络连通性，确认能访问 `api.workos.com`
+- 如使用代理，确认代理配置正确且代理服务正常运行
+- 在管理面板的「代理设置」中可测试连通性
+
+**Q: 调用 API 返回 401 Unauthorized**
+
+- 检查请求头中的 API Key 是否正确：`Authorization: Bearer your-api-key`
+- Anthropic 格式也支持 `x-api-key` 头
+- 确认 `config/setting.toml` 中的 `api_key` 或管理面板中已添加对应的 Key
+
+### 代理相关
+
+**Q: 配置代理后仍然连接超时**
+
+确认代理地址格式正确（需包含协议）：`http://127.0.0.1:7890`，不要写成 `127.0.0.1:7890`。可在管理面板「代理设置」中点击测试按钮验证。
 
 ## 环境要求
 
