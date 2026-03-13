@@ -1,5 +1,6 @@
 """Config loader with hot-reload support."""
 import os
+import shutil
 try:
     import tomllib
 except ModuleNotFoundError:
@@ -10,8 +11,47 @@ _CONFIG_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "config", "setting.toml")
 )
 
+# 镜像内置的默认配置备份路径
+_DEFAULT_CONFIG_PATH = "/app/config.default/setting.toml"
+
+
+def _ensure_config():
+    """确保配置文件存在。如果挂载的空卷覆盖了 config 目录，则从镜像备份中恢复。"""
+    if os.path.exists(_CONFIG_PATH):
+        return
+    config_dir = os.path.dirname(_CONFIG_PATH)
+    os.makedirs(config_dir, exist_ok=True)
+    # 优先从镜像内置备份复制
+    if os.path.exists(_DEFAULT_CONFIG_PATH):
+        shutil.copy2(_DEFAULT_CONFIG_PATH, _CONFIG_PATH)
+        print(f"[config] 已从镜像默认配置恢复: {_CONFIG_PATH}")
+    else:
+        # 本地开发环境兜底：生成最小默认配置
+        default_cfg = {
+            "global": {"api_key": "your-api-key"},
+            "server": {"host": "0.0.0.0", "port": 8081},
+            "admin": {"username": "admin", "password": "admin"},
+            "proxy": {"url": ""},
+            "retry": {"max_retries": 3, "retry_delay": 1},
+            "ob1": {
+                "credentials_path": "",
+                "workos_auth_url": "https://api.workos.com/user_management/authenticate",
+                "workos_client_id": "client_01K8YDZSSKDMK8GYTEHBAW4N4S",
+                "api_base": "https://dashboard.openblocklabs.com/api/v1",
+                "refresh_buffer_seconds": 600,
+                "rotation_mode": "balanced",
+                "refresh_interval": 60,
+            },
+            "logging": {"level": "INFO"},
+        }
+        with open(_CONFIG_PATH, "wb") as f:
+            tomli_w.dump(default_cfg, f)
+        print(f"[config] 已生成默认配置文件: {_CONFIG_PATH}")
+        print(f"[config] 请通过管理后台修改 API Key 和管理员密码")
+
 
 def _load():
+    _ensure_config()
     with open(_CONFIG_PATH, "rb") as f:
         return tomllib.load(f)
 
