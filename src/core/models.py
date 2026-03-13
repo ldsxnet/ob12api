@@ -17,6 +17,8 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = None
     top_p: Optional[float] = None
     max_tokens: Optional[int] = None
+    tools: Optional[List[dict[str, Any]]] = None
+    tool_choice: Optional[Union[str, dict[str, Any]]] = None
 
 
 class AnthropicMessage(BaseModel):
@@ -32,3 +34,5 @@ class AnthropicMessagesRequest(BaseModel):
     stream: bool = False
     temperature: Optional[float] = None
     top_p: Optional[float] = None
+    tools: Optional[List[dict[str, Any]]] = None
+    tool_choice: Optional[dict[str, Any]] = None

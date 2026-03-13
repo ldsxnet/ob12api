@@ -1,8 +1,9 @@
 """OB-1 API client — proxies requests to dashboard.openblocklabs.com/api/v1."""
+
 from __future__ import annotations
 
-from typing import AsyncIterator, NamedTuple
 import httpx
+from typing import Any
 
 from ..core import config as _config
 from ..core.config import OB1_API_BASE
@@ -18,6 +19,7 @@ _HEADERS = {
 
 class StreamResponse:
     """Wrapper that keeps httpx client alive during streaming."""
+
     def __init__(self, resp: httpx.Response, client: httpx.AsyncClient):
         self._resp = resp
         self._client = client
@@ -70,6 +72,7 @@ class OB1Client:
         temperature: float | None = None,
         top_p: float | None = None,
         max_tokens: int | None = None,
+        extra_payload: dict[str, Any] | None = None,
     ) -> httpx.Response:
         """Send chat completion request. Returns raw httpx Response."""
         payload = {
@@ -85,6 +88,8 @@ class OB1Client:
             payload["max_tokens"] = max_tokens
         if stream:
             payload["stream_options"] = {"include_usage": True}
+        if extra_payload:
+            payload.update(extra_payload)
 
         headers = {
             **_HEADERS,

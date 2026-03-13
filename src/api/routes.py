@@ -70,6 +70,7 @@ async def chat_completions(
     _: str = Depends(verify_api_key),
 ):
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
+    extra_payload = _build_openai_extra_payload(request.tools, request.tool_choice)
     resp = await _send_chat_request(
         messages=messages,
         model=request.model,
@@ -77,6 +78,7 @@ async def chat_completions(
         temperature=request.temperature,
         top_p=request.top_p,
         max_tokens=request.max_tokens,
+        extra_payload=extra_payload,
     )
     if isinstance(resp, JSONResponse):
         return resp
@@ -106,6 +108,10 @@ async def anthropic_messages(
     _: str = Depends(verify_api_key),
 ):
     messages = _anthropic_to_openai_messages(request)
+    extra_payload = _build_openai_extra_payload(
+        _anthropic_tools_to_openai(request.tools),
+        _anthropic_tool_choice_to_openai(request.tool_choice),
+    )
     resp = await _send_chat_request(
         messages=messages,
         model=request.model,
@@ -113,6 +119,7 @@ async def anthropic_messages(
         temperature=request.temperature,
         top_p=request.top_p,
         max_tokens=request.max_tokens,
+        extra_payload=extra_payload,
     )
     if isinstance(resp, JSONResponse):
         return resp
@@ -138,6 +145,7 @@ async def _send_chat_request(
     temperature: float | None,
     top_p: float | None,
     max_tokens: int | None,
+    extra_payload: dict[str, Any] | None = None,
 ):
     token_manager = _require_token_manager()
     ob1_client = _require_ob1_client()
@@ -168,6 +176,7 @@ async def _send_chat_request(
             temperature=temperature,
             top_p=top_p,
             max_tokens=max_tokens,
+            extra_payload=extra_payload,
         )
     except Exception as e:
         log.error("Backend error: %s", e)
@@ -196,6 +205,7 @@ async def _send_chat_request(
                 temperature=temperature,
                 top_p=top_p,
                 max_tokens=max_tokens,
+                extra_payload=extra_payload,
             )
         except Exception as e:
             log.error("Backend error after refresh: %s", e)
@@ -266,13 +276,119 @@ def _anthropic_to_openai_messages(
     if request.system:
         messages.append({"role": "system", "content": _flatten_content(request.system)})
     for message in request.messages:
-        messages.append(
-            {"role": message.role, "content": _flatten_content(message.content)}
+        blocks = (
+            message.content
+            if isinstance(message.content, list)
+            else [{"type": "text", "text": message.content}]
         )
+        text_parts: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
+        tool_results: list[dict[str, Any]] = []
+
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            if block_type == "text" and isinstance(block.get("text"), str):
+                text_parts.append(block["text"])
+            elif block_type == "tool_use":
+                tool_calls.append(
+                    {
+                        "id": block.get("id") or f"call_{uuid.uuid4().hex}",
+                        "type": "function",
+                        "function": {
+                            "name": block.get("name", "tool"),
+                            "arguments": json.dumps(
+                                block.get("input", {}), ensure_ascii=False
+                            ),
+                        },
+                    }
+                )
+            elif block_type == "tool_result":
+                tool_results.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": block.get("tool_use_id", ""),
+                        "content": _flatten_content(block.get("content", "")),
+                    }
+                )
+
+        if message.role == "assistant":
+            assistant_message: dict[str, Any] = {"role": "assistant"}
+            assistant_message["content"] = "\n".join(
+                part for part in text_parts if part
+            )
+            if tool_calls:
+                assistant_message["tool_calls"] = tool_calls
+            messages.append(assistant_message)
+        elif message.role == "user" and tool_results:
+            messages.extend(tool_results)
+            if text_parts:
+                messages.append({"role": "user", "content": "\n".join(text_parts)})
+        else:
+            messages.append(
+                {
+                    "role": message.role,
+                    "content": "\n".join(part for part in text_parts if part),
+                }
+            )
     return messages
 
 
+def _anthropic_tools_to_openai(
+    tools: Optional[list[dict[str, Any]]],
+) -> Optional[list[dict[str, Any]]]:
+    if not tools:
+        return None
+    converted: list[dict[str, Any]] = []
+    for tool in tools:
+        converted.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.get("name", "tool"),
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get(
+                        "input_schema", {"type": "object", "properties": {}}
+                    ),
+                },
+            }
+        )
+    return converted
+
+
+def _anthropic_tool_choice_to_openai(
+    tool_choice: Optional[dict[str, Any]],
+) -> Optional[dict[str, Any] | str]:
+    if not tool_choice:
+        return None
+    choice_type = tool_choice.get("type")
+    if choice_type in {"auto", "none"}:
+        return choice_type
+    if choice_type in {"any", "required"}:
+        return "required"
+    if choice_type == "tool":
+        name = tool_choice.get("name")
+        if name:
+            return {"type": "function", "function": {"name": name}}
+    return None
+
+
+def _build_openai_extra_payload(
+    tools: Optional[list[dict[str, Any]]],
+    tool_choice: Optional[dict[str, Any] | str],
+) -> Optional[dict[str, Any]]:
+    extra_payload: dict[str, Any] = {}
+    if tools:
+        extra_payload["tools"] = tools
+    if tool_choice is not None:
+        extra_payload["tool_choice"] = tool_choice
+    return extra_payload or None
+
+
 def _flatten_content(content: Any) -> str:
+    if content is None:
+        return ""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -291,13 +407,26 @@ def _flatten_content(content: Any) -> str:
 def _openai_to_anthropic_response(data: dict[str, Any], model: str) -> dict[str, Any]:
     choice = (data.get("choices") or [{}])[0]
     message = choice.get("message") or {}
+    content_blocks: list[dict[str, Any]] = []
     text = _flatten_content(message.get("content", ""))
+    if text:
+        content_blocks.append({"type": "text", "text": text})
+    for tool_call in message.get("tool_calls") or []:
+        function = tool_call.get("function") or {}
+        content_blocks.append(
+            {
+                "type": "tool_use",
+                "id": tool_call.get("id", f"toolu_{uuid.uuid4().hex}"),
+                "name": function.get("name", "tool"),
+                "input": _parse_json_object(function.get("arguments")),
+            }
+        )
     usage = data.get("usage") or {}
     return {
         "id": data.get("id", f"msg_{uuid.uuid4().hex}"),
         "type": "message",
         "role": "assistant",
-        "content": [{"type": "text", "text": text}],
+        "content": content_blocks or [{"type": "text", "text": ""}],
         "model": data.get("model", model),
         "stop_reason": _map_finish_reason(choice.get("finish_reason")),
         "stop_sequence": None,
@@ -318,12 +447,28 @@ def _map_finish_reason(reason: Optional[str]) -> str:
     return reason or "end_turn"
 
 
+def _parse_json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
 async def _proxy_stream_anthropic(resp, model: str) -> AsyncGenerator[str, None]:
     message_id = f"msg_{uuid.uuid4().hex}"
     sent_start = False
-    content_started = False
+    text_started = False
+    text_index = 0
     usage: dict[str, Any] = {"input_tokens": 0, "output_tokens": 0}
     stop_reason = "end_turn"
+    tool_state: dict[int, dict[str, Any]] = {}
+    next_content_index = 0
     try:
         async for line in resp.aiter_lines():
             if not line or not line.startswith("data: "):
@@ -361,21 +506,23 @@ async def _proxy_stream_anthropic(resp, model: str) -> AsyncGenerator[str, None]
             finish_reason = (chunk.get("choices") or [{}])[0].get("finish_reason")
             text = delta.get("content")
             if text:
-                if not content_started:
+                if not text_started:
+                    text_index = next_content_index
                     yield _anthropic_sse(
                         "content_block_start",
                         {
                             "type": "content_block_start",
-                            "index": 0,
+                            "index": text_index,
                             "content_block": {"type": "text", "text": ""},
                         },
                     )
-                    content_started = True
+                    text_started = True
+                    next_content_index += 1
                 yield _anthropic_sse(
                     "content_block_delta",
                     {
                         "type": "content_block_delta",
-                        "index": 0,
+                        "index": text_index,
                         "delta": {"type": "text_delta", "text": text},
                     },
                 )
@@ -385,6 +532,55 @@ async def _proxy_stream_anthropic(resp, model: str) -> AsyncGenerator[str, None]
                     "completion_tokens", usage["output_tokens"]
                 )
                 _track_usage(chunk_usage)
+            for tool_delta in delta.get("tool_calls") or []:
+                tool_idx = tool_delta.get("index", 0)
+                state = tool_state.setdefault(
+                    tool_idx,
+                    {
+                        "event_index": next_content_index,
+                        "id": tool_delta.get("id") or f"toolu_{uuid.uuid4().hex}",
+                        "name": ((tool_delta.get("function") or {}).get("name"))
+                        or "tool",
+                        "arguments": "",
+                        "started": False,
+                    },
+                )
+                if tool_delta.get("id"):
+                    state["id"] = tool_delta["id"]
+                function = tool_delta.get("function") or {}
+                if function.get("name"):
+                    state["name"] = function["name"]
+                if not state["started"]:
+                    next_content_index = max(
+                        next_content_index, state["event_index"] + 1
+                    )
+                    yield _anthropic_sse(
+                        "content_block_start",
+                        {
+                            "type": "content_block_start",
+                            "index": state["event_index"],
+                            "content_block": {
+                                "type": "tool_use",
+                                "id": state["id"],
+                                "name": state["name"],
+                                "input": {},
+                            },
+                        },
+                    )
+                    state["started"] = True
+                if function.get("arguments"):
+                    state["arguments"] += function["arguments"]
+                    yield _anthropic_sse(
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": state["event_index"],
+                            "delta": {
+                                "type": "input_json_delta",
+                                "partial_json": function["arguments"],
+                            },
+                        },
+                    )
             if finish_reason:
                 stop_reason = _map_finish_reason(finish_reason)
 
@@ -405,18 +601,30 @@ async def _proxy_stream_anthropic(resp, model: str) -> AsyncGenerator[str, None]
                     },
                 },
             )
-        if not content_started:
+        if text_started:
+            yield _anthropic_sse(
+                "content_block_stop",
+                {"type": "content_block_stop", "index": text_index},
+            )
+        elif not tool_state:
             yield _anthropic_sse(
                 "content_block_start",
                 {
                     "type": "content_block_start",
-                    "index": 0,
+                    "index": next_content_index,
                     "content_block": {"type": "text", "text": ""},
                 },
             )
-        yield _anthropic_sse(
-            "content_block_stop", {"type": "content_block_stop", "index": 0}
-        )
+            yield _anthropic_sse(
+                "content_block_stop",
+                {"type": "content_block_stop", "index": next_content_index},
+            )
+        for state in sorted(tool_state.values(), key=lambda item: item["event_index"]):
+            if state["started"]:
+                yield _anthropic_sse(
+                    "content_block_stop",
+                    {"type": "content_block_stop", "index": state["event_index"]},
+                )
         yield _anthropic_sse(
             "message_delta",
             {
